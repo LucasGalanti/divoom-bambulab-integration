@@ -35,10 +35,16 @@ class PrintState:
     nozzle_temper: float = 0.0
     bed_temper: float = 0.0
     wifi_signal: int = 0
+    filament_runout: bool = False   # HMS error: filament out
+    hms_errors: list = field(default_factory=list)  # raw HMS error codes
 
     @property
     def is_printing(self) -> bool:
         return self.gcode_state.upper() in ("RUNNING", "PREPARE")
+
+    @property
+    def is_paused(self) -> bool:
+        return self.gcode_state.upper() == "PAUSE"
 
     @property
     def is_finished(self) -> bool:
@@ -49,8 +55,12 @@ class PrintState:
         return self.gcode_state.upper() == "FAILED"
 
     @property
+    def is_heating(self) -> bool:
+        return self.gcode_state.upper() == "PREPARE"
+
+    @property
     def is_idle(self) -> bool:
-        return not self.is_printing and not self.is_finished and not self.is_failed
+        return not self.is_printing and not self.is_finished and not self.is_failed and not self.is_paused
 
 
 class BambuMQTTClient:
@@ -197,3 +207,17 @@ class BambuMQTTClient:
 
         if changed and self.on_state_change:
             self.on_state_change(self._state)
+
+        # HMS errors (separate key in payload, not inside "print")
+        hms_list = payload.get("hms", [])
+        if hms_list:
+            self._state.hms_errors = hms_list
+            # Filament runout: attr_id starts with "0700" (spool sensor error family)
+            runout = any(
+                str(e.get("attr_id", "")).startswith("0700") or "700" in str(e.get("attr_id", ""))
+                for e in hms_list
+            )
+            if runout != self._state.filament_runout:
+                self._state.filament_runout = runout
+                if self.on_state_change:
+                    self.on_state_change(self._state)

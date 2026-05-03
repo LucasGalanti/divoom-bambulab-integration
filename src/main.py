@@ -36,6 +36,7 @@ from display_layouts import (
     make_done_screen,
     make_failed_screen,
     load_sprite,
+    make_trigger_screen,
 )
 from pixoo_renderer import PixooRenderer
 
@@ -79,10 +80,34 @@ _renderer: PixooRenderer = None
 _printer_icon = None
 _last_pushed_state: str = ""
 _running = True
+_prev_gcode_state: str = ""
+_prev_filament_runout: bool = False
+
+SPLASH_DURATION_S = 4  # seconds to show a trigger splash before resuming
+
+# Mapping from gcode_state transition to trigger name
+_STATE_TRIGGERS = {
+    "RUNNING":  "started",
+    "FINISH":   "done",
+    "FAILED":   "failed",
+    "PAUSE":    "paused",
+    "PREPARE":  "heating",
+}
 
 # ---------------------------------------------------------------------------
 # Display logic
 # ---------------------------------------------------------------------------
+
+def _show_splash(trigger: str):
+    """Push a full-screen trigger splash for SPLASH_DURATION_S seconds."""
+    img = make_trigger_screen(trigger, asset_dir=str(SPRITE_DIR.parent / "sprites"))
+    if img is None:
+        logger.warning("Splash PNG not found for '%s' — run: python scripts/make_sprite.py --all", trigger)
+        return
+    _renderer.push(img, force=True)
+    logger.info("Splash → %s (showing for %ds)", trigger, SPLASH_DURATION_S)
+    time.sleep(SPLASH_DURATION_S)
+
 
 def _push_for_state(state: PrintState, force: bool = False):
     global _last_pushed_state
@@ -119,6 +144,13 @@ def _push_for_state(state: PrintState, force: bool = False):
             logger.info("Display updated → FAILED")
             _last_pushed_state = "failed"
 
+    elif state.is_paused:
+        if force or _last_pushed_state != "paused":
+            img = make_idle_screen()
+            _renderer.push(img, force=True)
+            logger.info("Display updated → PAUSED")
+            _last_pushed_state = "paused"
+
     else:
         if force or _last_pushed_state != "idle":
             img = make_idle_screen()
@@ -129,9 +161,24 @@ def _push_for_state(state: PrintState, force: bool = False):
 
 def on_state_change(state: PrintState):
     """Callback fired by BambuMQTTClient on every state change."""
+    global _prev_gcode_state, _prev_filament_runout
+
     logger.debug("State change: %s  %d%%  L:%d/%d",
                  state.gcode_state, state.mc_percent,
                  state.layer_num, state.total_layer_num)
+
+    new_state = state.gcode_state.upper()
+
+    # Filament runout takes priority
+    if state.filament_runout and not _prev_filament_runout:
+        _show_splash("filament-out")
+    _prev_filament_runout = state.filament_runout
+
+    # State transition → show splash
+    if new_state != _prev_gcode_state and new_state in _STATE_TRIGGERS:
+        _show_splash(_STATE_TRIGGERS[new_state])
+
+    _prev_gcode_state = new_state
     _push_for_state(state)
 
 
