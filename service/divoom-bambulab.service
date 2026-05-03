@@ -1,0 +1,24 @@
+# systemd service unit for divoom-bambulab integration
+# Install:
+#   sudo cp service/divoom-bambulab.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now divoom-bambulab
+
+[Unit]
+Description=BambuLab X1C → Divoom Pixoo 64 Display Integration
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/divoom_bambulab_integration
+EnvironmentFile=/home/pi/divoom_bambulab_integration/.env
+ExecStart=/home/pi/divoom_bambulab_integration/.venv/bin/python src/main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

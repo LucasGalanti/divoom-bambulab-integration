@@ -1,0 +1,51 @@
+# BambuLab X1C → Divoom Pixoo 64 Integration Config
+# Sensitive values (IPs, codes) should be set in .env — this file holds display/layout preferences
+
+display:
+  size: 64
+  brightness: 80             # 0–100
+  update_interval_s: 3       # min seconds between Pixoo pushes
+  pic_id_reset_threshold: 250  # reset PicID counter before it hits device limit (~300)
+
+colors:
+  background_printing: [0, 218, 52]     # green — active print
+  background_idle:     [20, 20, 20]     # near-black — idle
+  background_done:     [0, 80, 200]     # blue — print finished
+  header_footer:       [51, 51, 51]     # dark grey
+  text_primary:        [255, 255, 255]  # white
+  text_secondary:      [151, 151, 151]  # light grey
+  progress_fill:       [255, 0, 68]     # red
+  progress_track:      [51, 51, 51]     # dark grey
+
+layout:
+  header:
+    y_start: 0
+    y_end: 6
+    font: FIVE_PIX
+  clock:
+    position: [15, 10]
+    font: CLOCK
+  icon:
+    position: [22, 35]
+    size: 20
+    resample: nearest
+  progress_bar:
+    track: {x: 2, y: 25, width: 60, height: 8}
+    fill:  {x: 3, y: 26, max_width: 58, height: 7}
+    label: {x: 5, y: 27, font: PICO_8}
+  footer:
+    y_start: 57
+    y_end: 63
+    font: FIVE_PIX
+
+bambu:
+  mqtt_port: 8883           # TLS MQTT port on the printer
+  mqtt_tls: true
+  report_topic_template: "device/{serial}/report"
+  reconnect_delay_s: 5
+  # State values reported by the printer
+  states:
+    printing: ["RUNNING", "running"]
+    idle:     ["IDLE", "idle", "FINISH", "finish", "FAILED", "failed"]
+    done:     ["FINISH", "finish"]
+    failed:   ["FAILED", "failed"]

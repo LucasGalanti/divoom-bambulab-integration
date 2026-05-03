@@ -1,0 +1,168 @@
+# ============================================================
+# BambuLab X1C → Divoom Pixoo 64 — Home Assistant Configuration
+# ============================================================
+#
+# PREREQUISITES:
+#   1. ha-bambulab installed via HACS
+#      https://github.com/greghesp/ha-bambulab
+#
+#   2. pixoo-homeassistant installed via HACS
+#      https://github.com/gickowtf/pixoo-homeassistant
+#
+#   3. Both integrations configured in HA Settings → Integrations
+#
+# HOW TO USE:
+#   - Replace all "sensor.bambu_x1c_*" with your actual entity IDs
+#     (check Developer Tools → States → filter "bambu")
+#   - Replace "PRINTER_ICON_BASE64" with the output of:
+#     python scripts/encode_icon.py --file assets/sprites/printer.png --size 20
+#   - Add this file content to your pixoo-homeassistant configuration
+#     (usually in the integration's "pages" YAML config)
+#
+# ENTITY NAMING NOTE:
+#   ha-bambulab entity IDs follow this pattern:
+#     sensor.bambu_<printer_name>_<attribute>
+#   Examples (adjust to match yours):
+#     sensor.bambu_x1c_print_status
+#     sensor.bambu_x1c_current_layer
+#     sensor.bambu_x1c_total_layer_count
+#     sensor.bambu_x1c_print_progress
+#     sensor.bambu_x1c_remaining_time
+# ============================================================
+
+- page_type: components
+
+  # Only show this page while the printer is actively printing
+  enabled: >-
+    {% if is_state('sensor.bambu_x1c_print_status', 'running') or
+          is_state('sensor.bambu_x1c_print_status', 'prepare') %}
+      true
+    {% else %}
+      false
+    {% endif %}
+
+  variables:
+    layer:     "{{ states('sensor.bambu_x1c_current_layer') | int(0) }}"
+    all_layer: "{{ states('sensor.bambu_x1c_total_layer_count') | int(0) }}"
+    percent:   "{{ states('sensor.bambu_x1c_print_progress') | int(0) }}"
+    time:      "{{ now().strftime('%H:%M') }}"
+
+    # Calculate estimated completion time from remaining minutes
+    footer: >-
+      {%- set remaining = states('sensor.bambu_x1c_remaining_time') | int(0) -%}
+      {%- if remaining > 0 -%}
+        {{ (now() + timedelta(minutes=remaining)).strftime('%H:%M') }}
+      {%- else -%}
+        soon
+      {%- endif -%}
+
+    # Printer icon as base64 PNG (20x20px)
+    # Generate with: python scripts/encode_icon.py --file assets/sprites/printer.png --size 20
+    icon: "PRINTER_ICON_BASE64"
+
+  components:
+
+    # Background (green = active print)
+    - type: rectangle
+      position: [0, 0]
+      size: [64, 64]
+      color: [0, 218, 52]
+
+    # Header bar
+    - type: rectangle
+      position: [0, 0]
+      size: [64, 7]
+      color: [51, 51, 51]
+
+    # Layer info in header
+    - type: text
+      content: "L:{{ layer }}/{{ all_layer }}"
+      color: white
+      font: FIVE_PIX
+      position: [3, 1]
+
+    # Current time
+    - type: text
+      content: "{{ time }}"
+      color: [151, 151, 151]
+      font: CLOCK
+      position: [15, 10]
+
+    # Printer icon (centered)
+    - type: image
+      position: [22, 35]
+      image_data: "{{ icon }}"
+      resample_mode: nearest
+      height: 20
+
+    # Progress bar track
+    - type: rectangle
+      position: [2, 25]
+      size: [60, 9]
+      color: [40, 40, 40]
+
+    # Progress bar fill (dynamic width via Jinja2)
+    - type: rectangle
+      position: [3, 26]
+      size: ["{{ (58 / 100 * percent | int) | int }}", 7]
+      color: [255, 0, 68]
+
+    # Percent label
+    - type: text
+      content: "{{ percent }}%"
+      color: white
+      font: PICO_8
+      position: [5, 27]
+
+    # Footer bar
+    - type: rectangle
+      position: [0, 57]
+      size: [64, 7]
+      color: [51, 51, 51]
+
+    - type: text
+      content: "DONE:{{ footer }}"
+      color: white
+      font: FIVE_PIX
+      position: [3, 58]
+
+
+# IDLE PAGE (shown when printer is not printing)
+- page_type: components
+
+  enabled: >-
+    {% if not (is_state('sensor.bambu_x1c_print_status', 'running') or
+               is_state('sensor.bambu_x1c_print_status', 'prepare')) %}
+      true
+    {% else %}
+      false
+    {% endif %}
+
+  components:
+
+    - type: rectangle
+      position: [0, 0]
+      size: [64, 64]
+      color: [20, 20, 20]
+
+    - type: rectangle
+      position: [0, 0]
+      size: [64, 7]
+      color: [51, 51, 51]
+
+    - type: rectangle
+      position: [0, 57]
+      size: [64, 7]
+      color: [51, 51, 51]
+
+    - type: text
+      content: "IDLE"
+      color: [100, 100, 100]
+      font: FIVE_PIX
+      position: [22, 1]
+
+    - type: text
+      content: "{{ now().strftime('%H:%M') }}"
+      color: [100, 100, 100]
+      font: CLOCK
+      position: [15, 26]
