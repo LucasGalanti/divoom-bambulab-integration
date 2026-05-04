@@ -221,3 +221,58 @@ class BambuMQTTClient:
                 self._state.filament_runout = runout
                 if self.on_state_change:
                     self.on_state_change(self._state)
+
+
+class BambuCloudMQTTClient(BambuMQTTClient):
+    """
+    Cloud MQTT variant — connects to Bambu's cloud broker instead of the
+    printer's local LAN broker.
+
+    The printer does NOT need LAN mode enabled; Bambu Handy and Bambu Cloud
+    continue to work normally. Latency is ~500 ms vs ~100 ms for LAN mode.
+
+    Usage:
+        from bambu_cloud_auth import cloud_login
+        token, username = cloud_login(email, password)
+        client = BambuCloudMQTTClient(
+            serial="00M09D4A2100978",
+            auth_token=token,
+            mqtt_username=username,
+            on_state_change=my_callback,
+        )
+        client.start()
+    """
+
+    CLOUD_HOST = "us.mqtt.bambulab.com"
+
+    def __init__(
+        self,
+        serial: str,
+        auth_token: str,
+        mqtt_username: str,
+        on_state_change: Optional[Callable[[PrintState], None]] = None,
+    ):
+        # Pass the cloud host as ip; access_code carries the JWT token as MQTT password
+        super().__init__(
+            ip=self.CLOUD_HOST,
+            serial=serial,
+            access_code=auth_token,
+            on_state_change=on_state_change,
+            tls=True,
+        )
+        self._mqtt_username = mqtt_username  # "u_<digits>"
+
+    def _build_client(self) -> mqtt.Client:
+        client = mqtt.Client(client_id=f"pixoo-bambu-{self.serial[:8]}")
+        # Cloud auth: username = u_<user_id>, password = JWT token
+        client.username_pw_set(self._mqtt_username, self.access_code)
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        client.tls_set_context(ctx)
+
+        client.on_connect = self._on_connect
+        client.on_disconnect = self._on_disconnect
+        client.on_message = self._on_message
+        return client

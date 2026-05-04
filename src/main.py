@@ -29,7 +29,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from bambu_mqtt import BambuMQTTClient, PrintState
+from bambu_mqtt import BambuMQTTClient, BambuCloudMQTTClient, PrintState
 from display_layouts import (
     make_progress_screen,
     make_idle_screen,
@@ -64,9 +64,14 @@ def _require_env(key: str) -> str:
 
 
 PIXOO_IP         = _require_env("PIXOO_IP")
-BAMBU_IP         = _require_env("BAMBU_PRINTER_IP")
 BAMBU_SERIAL     = _require_env("BAMBU_SERIAL")
-BAMBU_CODE       = _require_env("BAMBU_ACCESS_CODE")
+CONNECTION_MODE  = os.getenv("BAMBU_CONNECTION_MODE", "lan").lower()
+# LAN mode
+BAMBU_IP         = os.getenv("BAMBU_PRINTER_IP", "")
+BAMBU_CODE       = os.getenv("BAMBU_ACCESS_CODE", "")
+# Cloud mode
+BAMBU_EMAIL      = os.getenv("BAMBU_EMAIL", "")
+BAMBU_PASSWORD   = os.getenv("BAMBU_PASSWORD", "")
 PIXOO_BRIGHTNESS = int(os.getenv("PIXOO_BRIGHTNESS", "80"))
 UPDATE_INTERVAL  = float(os.getenv("PIXOO_UPDATE_INTERVAL", "3"))
 
@@ -190,8 +195,9 @@ def main():
     global _renderer, _printer_icon, _running
 
     logger.info("=== BambuLab → Pixoo 64 Integration starting ===")
-    logger.info("Pixoo IP:   %s", PIXOO_IP)
-    logger.info("Printer IP: %s (serial: %s)", BAMBU_IP, BAMBU_SERIAL)
+    logger.info("Pixoo IP:      %s", PIXOO_IP)
+    logger.info("Serial:        %s", BAMBU_SERIAL)
+    logger.info("Connect mode:  %s", CONNECTION_MODE.upper())
 
     # Load printer sprite
     sprite_path = SPRITE_DIR / "printer.png"
@@ -216,13 +222,36 @@ def main():
     _push_for_state(PrintState(), force=True)
 
     # Start MQTT client
-    client = BambuMQTTClient(
-        ip=BAMBU_IP,
-        serial=BAMBU_SERIAL,
-        access_code=BAMBU_CODE,
-        on_state_change=on_state_change,
-        tls=True,
-    )
+    if CONNECTION_MODE == "cloud":
+        from bambu_cloud_auth import cloud_login, VerificationRequiredError, CLOUD_MQTT_HOST
+        if not BAMBU_EMAIL or not BAMBU_PASSWORD:
+            logger.error("BAMBU_EMAIL and BAMBU_PASSWORD are required for cloud mode")
+            sys.exit(1)
+        try:
+            auth_token, mqtt_username = cloud_login(BAMBU_EMAIL, BAMBU_PASSWORD)
+        except VerificationRequiredError as exc:
+            logger.warning("%s", exc)
+            code = input("Enter verification code: ").strip()
+            auth_token, mqtt_username = cloud_login(BAMBU_EMAIL, BAMBU_PASSWORD, code)
+        logger.info("Cloud broker:  %s", CLOUD_MQTT_HOST)
+        client = BambuCloudMQTTClient(
+            serial=BAMBU_SERIAL,
+            auth_token=auth_token,
+            mqtt_username=mqtt_username,
+            on_state_change=on_state_change,
+        )
+    else:
+        if not BAMBU_IP or not BAMBU_CODE:
+            logger.error("BAMBU_PRINTER_IP and BAMBU_ACCESS_CODE are required for LAN mode")
+            sys.exit(1)
+        logger.info("Printer IP:    %s", BAMBU_IP)
+        client = BambuMQTTClient(
+            ip=BAMBU_IP,
+            serial=BAMBU_SERIAL,
+            access_code=BAMBU_CODE,
+            on_state_change=on_state_change,
+            tls=True,
+        )
     client.start()
     logger.info("Listening for printer events... (Ctrl+C to stop)")
 
