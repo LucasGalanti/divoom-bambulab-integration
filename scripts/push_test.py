@@ -101,10 +101,12 @@ def mode_idle(ip: str):
     print(f"  Response: {r}")
 
 
-def mode_done(ip: str):
+def mode_done(ip: str, job_name: str = ""):
     """Push print done screen."""
     print("Pushing done screen...")
-    img = _make_done_image()
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from display_layouts import make_done_screen
+    img = make_done_screen(job_name)
     reset_counter(ip)
     r = send_frame(ip, img)
     print(f"  Response: {r}")
@@ -196,6 +198,7 @@ def main():
                         choices=["ping", "brightness", "progress", "idle", "done", "image", "gif"],
                         help="Test mode")
     parser.add_argument("--value", type=int, default=50, help="Integer value (percent or brightness)")
+    parser.add_argument("--name", type=str, default="", help="Job name for done screen")
     parser.add_argument("--file", type=str, default=None, help="Image or GIF file path")
     parser.add_argument("--fps", type=int, default=10, help="FPS for GIF mode")
     args = parser.parse_args()
@@ -205,7 +208,7 @@ def main():
         "brightness": lambda: mode_brightness(args.ip, args.value),
         "progress":   lambda: mode_progress(args.ip, args.value),
         "idle":       lambda: mode_idle(args.ip),
-        "done":       lambda: mode_done(args.ip),
+        "done":       lambda: mode_done(args.ip, args.name),
         "image":      lambda: mode_image(args.ip, args.file or ""),
         "gif":        lambda: mode_gif(args.ip, args.file or "", args.fps),
     }
