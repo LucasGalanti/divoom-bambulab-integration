@@ -15,6 +15,7 @@ import logging
 import ssl
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -130,7 +131,8 @@ class BambuMQTTClient:
     # ------------------------------------------------------------------
 
     def _build_client(self) -> mqtt.Client:
-        client = mqtt.Client(client_id=f"pixoo-bambu-{self.serial[:8]}")
+        # Unique client_id per run avoids rc=7 session-takeover disconnects
+        client = mqtt.Client(client_id=f"pixoo-bambu-{self.serial[:8]}-{uuid.uuid4().hex[:6]}")
         client.username_pw_set(self.MQTT_USER, self.access_code)
 
         if self.tls:
@@ -156,16 +158,29 @@ class BambuMQTTClient:
                 if not self._stop_event.is_set():
                     time.sleep(self.RECONNECT_DELAY_S)
 
+    @property
+    def request_topic(self) -> str:
+        return f"device/{self.serial}/request"
+
     def _on_connect(self, client, userdata, flags, rc):
         if rc == 0:
             logger.info("Connected to printer MQTT broker at %s", self.ip)
             client.subscribe(self.report_topic)
             logger.info("Subscribed to %s", self.report_topic)
+            # Request current printer state immediately
+            client.publish(
+                self.request_topic,
+                json.dumps({"pushing": {"sequence_id": "0", "command": "pushall"}}),
+            )
         else:
             logger.error("MQTT connect failed, rc=%d", rc)
 
     def _on_disconnect(self, client, userdata, rc):
-        if rc != 0:
+        if rc == 7:
+            # rc=7 on Bambu Cloud = broker enforcing single-subscriber policy
+            # (Bambu Handy is also connected and reclaims the slot). Expected.
+            logger.debug("MQTT session replaced by another client (rc=7) — reconnecting")
+        elif rc != 0:
             logger.warning("Unexpected MQTT disconnect (rc=%d) — will reconnect", rc)
 
     def _on_message(self, client, userdata, msg):
