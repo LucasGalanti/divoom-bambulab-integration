@@ -1,6 +1,8 @@
 *.env
 .env
 .bambu_token.json
+logs/
+tools/nssm/
 __pycache__/
 *.pyc
 *.pyo
