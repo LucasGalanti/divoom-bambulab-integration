@@ -13,6 +13,8 @@ Note: Bambu's login API sits behind Cloudflare. Plain `requests` works in most
 import base64
 import json
 import logging
+import time
+from pathlib import Path
 
 import requests
 
@@ -74,30 +76,107 @@ def cloud_login(email: str, password: str, verification_code: str = "") -> tuple
     if login_type in ("verifyCode", "tfa"):
         raise VerificationRequiredError(login_type)
 
-    if resp.status_code != 200 or "token" not in data:
+    # Bambu may return "token" or "accessToken" depending on the flow
+    token: str = data.get("accessToken") or data.get("token")
+    if resp.status_code != 200 or not token:
         raise RuntimeError(
             f"Bambu Cloud login failed (HTTP {resp.status_code}): {resp.text[:400]}"
         )
 
-    token: str = data["token"]
-    username = _username_from_jwt(token)
+    expires_in = int(data.get("expiresIn", 7_776_000))
+    username = _get_username(token)
+    save_token_cache(token, username, expires_in)
     logger.info("Bambu Cloud authenticated (%s)", _mask(username))
     return token, username
 
 
-def _username_from_jwt(token: str) -> str:
-    """Decode JWT payload (no signature verification) and return the 'username' field."""
+def _get_username(token: str) -> str:
+    """
+    Extract the MQTT username (u_<digits>) from the auth token.
+
+    Tries JWT decode first (token starts with eyJ). Falls back to calling the
+    Bambu preference API for opaque tokens (start with AAB or similar).
+    """
+    # JWT path
+    if token.startswith("eyJ"):
+        try:
+            segment = token.split(".")[1]
+            segment += "=" * ((4 - len(segment) % 4) % 4)
+            payload = json.loads(base64.b64decode(segment))
+            username = payload.get("username") or payload.get("sub")
+            if username:
+                return username
+        except Exception:
+            pass  # fall through to API call
+
+    # Opaque token path — ask the preference API for the uid
     try:
-        segment = token.split(".")[1]
-        segment += "=" * ((4 - len(segment) % 4) % 4)
-        payload = json.loads(base64.b64decode(segment))
-        username = payload.get("username") or payload.get("sub")
-        if not username:
-            raise ValueError(f"No 'username' or 'sub' in JWT payload (keys: {list(payload.keys())})")
-        return username
+        resp = requests.get(
+            "https://api.bambulab.com/v1/design-user-service/my/preference",
+            headers={**_LOGIN_HEADERS, "Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        uid = resp.json().get("uid")
+        if uid:
+            return f"u_{uid}"
     except Exception as exc:
-        raise RuntimeError(f"Could not extract MQTT username from JWT: {exc}") from exc
+        raise RuntimeError(f"Could not retrieve MQTT username from Bambu API: {exc}") from exc
+
+    raise RuntimeError("Could not determine MQTT username from token or API response")
 
 
 def _mask(s: str) -> str:
     return s[:7] + "xxxxx" if len(s) > 7 else s
+
+
+# ---------------------------------------------------------------------------
+# Token cache — avoids verification code prompts on every restart
+# Stored in <project_root>/.bambu_token.json  (excluded from git)
+# ---------------------------------------------------------------------------
+
+_CACHE_FILE = Path(__file__).parent.parent / ".bambu_token.json"
+# Refresh 24 h before actual expiry so we never hit an expired token mid-run
+_EXPIRY_MARGIN_S = 86_400
+
+
+def load_cached_token() -> tuple[str, str] | None:
+    """
+    Return (auth_token, mqtt_username) from the on-disk cache if it is still
+    valid, otherwise return None.
+    """
+    if not _CACHE_FILE.exists():
+        return None
+    try:
+        data = json.loads(_CACHE_FILE.read_text())
+        expires_at = data.get("expires_at", 0)
+        if time.time() < expires_at - _EXPIRY_MARGIN_S:
+            logger.info("Using cached Bambu Cloud token (%s)", _mask(data["username"]))
+            return data["token"], data["username"]
+        logger.info("Cached token has expired — re-authenticating")
+    except Exception as exc:
+        logger.debug("Could not read token cache: %s", exc)
+    return None
+
+
+def save_token_cache(token: str, username: str, expires_in_s: int = 7_776_000) -> None:
+    """
+    Persist the token to disk.  expires_in_s defaults to 90 days
+    (Bambu's standard expiry returned in the login response).
+    """
+    try:
+        data = {
+            "token": token,
+            "username": username,
+            "expires_at": time.time() + expires_in_s,
+        }
+        _CACHE_FILE.write_text(json.dumps(data))
+        logger.debug("Token cache saved to %s", _CACHE_FILE)
+    except Exception as exc:
+        logger.warning("Could not save token cache: %s", exc)
+
+
+def clear_token_cache() -> None:
+    """Delete the cached token (e.g. after an authentication failure)."""
+    if _CACHE_FILE.exists():
+        _CACHE_FILE.unlink()
+        logger.debug("Token cache cleared")

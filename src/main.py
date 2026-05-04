@@ -223,16 +223,19 @@ def main():
 
     # Start MQTT client
     if CONNECTION_MODE == "cloud":
-        from bambu_cloud_auth import cloud_login, VerificationRequiredError, CLOUD_MQTT_HOST
+        from bambu_cloud_auth import cloud_login, VerificationRequiredError, CLOUD_MQTT_HOST, load_cached_token
         if not BAMBU_EMAIL or not BAMBU_PASSWORD:
             logger.error("BAMBU_EMAIL and BAMBU_PASSWORD are required for cloud mode")
             sys.exit(1)
-        try:
-            auth_token, mqtt_username = cloud_login(BAMBU_EMAIL, BAMBU_PASSWORD)
-        except VerificationRequiredError as exc:
-            logger.warning("%s", exc)
-            code = input("Enter verification code: ").strip()
-            auth_token, mqtt_username = cloud_login(BAMBU_EMAIL, BAMBU_PASSWORD, code)
+        result = load_cached_token()
+        if result is None:
+            try:
+                result = cloud_login(BAMBU_EMAIL, BAMBU_PASSWORD)
+            except VerificationRequiredError as exc:
+                logger.warning("%s", exc)
+                code = input("Enter verification code: ").strip()
+                result = cloud_login(BAMBU_EMAIL, BAMBU_PASSWORD, code)
+        auth_token, mqtt_username = result
         logger.info("Cloud broker:  %s", CLOUD_MQTT_HOST)
         client = BambuCloudMQTTClient(
             serial=BAMBU_SERIAL,

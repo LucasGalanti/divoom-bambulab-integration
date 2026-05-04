@@ -1,5 +1,6 @@
 *.env
 .env
+.bambu_token.json
 __pycache__/
 *.pyc
 *.pyo
