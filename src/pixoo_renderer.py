@@ -91,8 +91,17 @@ class PixooRenderer:
             return True
 
     def set_brightness(self, level: int) -> bool:
-        """Set display brightness 0–100."""
+        """Set display brightness 0-100."""
         return self._post({"Command": "Channel/SetBrightness", "Brightness": max(0, min(100, level))})
+
+    def set_custom_channel(self) -> bool:
+        """Switch the device to the Custom/DIY channel (index 3) so Draw commands are visible."""
+        ok = self._post({"Command": "Channel/SetIndex", "SelectIndex": 3})
+        if ok:
+            logger.info("Pixoo channel set to Custom (index 3)")
+        else:
+            logger.warning("Failed to set Pixoo channel to Custom")
+        return ok
 
     def ping(self) -> bool:
         """Returns True if the device responds."""

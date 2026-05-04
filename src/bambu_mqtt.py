@@ -155,8 +155,10 @@ class BambuMQTTClient:
                 self._client.loop_forever()
             except Exception as e:
                 logger.warning("MQTT connection error: %s — retrying in %ds", e, self.RECONNECT_DELAY_S)
-                if not self._stop_event.is_set():
-                    time.sleep(self.RECONNECT_DELAY_S)
+            # Always wait before reconnecting (even on normal rc=7 kicks)
+            # so the connection stays up long enough to receive printer data
+            if not self._stop_event.is_set():
+                self._stop_event.wait(self.RECONNECT_DELAY_S)
 
     @property
     def request_topic(self) -> str:

@@ -22,6 +22,38 @@ import sys
 import time
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Logging  (must be before any other local imports so paho-mqtt doesn't
+#           initialise the root logger before we add our FileHandler)
+# ---------------------------------------------------------------------------
+
+_LOG_FILE = Path(__file__).parent.parent / "logs" / "divoom-bambulab.log"
+_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+_formatter = logging.Formatter(
+    fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
+
+_file_handler = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+_file_handler.setFormatter(_formatter)
+_root.addHandler(_file_handler)
+
+# Only add console handler when stdout is available (absent under pythonw.exe)
+if sys.stdout is not None:
+    _stream_handler = logging.StreamHandler(sys.stdout)
+    _stream_handler.setFormatter(_formatter)
+    _root.addHandler(_stream_handler)
+
+logger = logging.getLogger("main")
+
+# ---------------------------------------------------------------------------
+# Remaining imports (after logging is configured)
+# ---------------------------------------------------------------------------
+
 # Allow running from either project root or src/
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -32,6 +64,7 @@ load_dotenv()
 from bambu_mqtt import BambuMQTTClient, BambuCloudMQTTClient, PrintState
 from display_layouts import (
     make_progress_screen,
+    make_progress_gif_frames,
     make_idle_screen,
     make_done_screen,
     make_failed_screen,
@@ -39,17 +72,6 @@ from display_layouts import (
     make_trigger_screen,
 )
 from pixoo_renderer import PixooRenderer
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger("main")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -107,10 +129,10 @@ def _show_splash(trigger: str):
     """Push a full-screen trigger splash for SPLASH_DURATION_S seconds."""
     img = make_trigger_screen(trigger, asset_dir=str(SPRITE_DIR.parent / "sprites"))
     if img is None:
-        logger.warning("Splash PNG not found for '%s' — run: python scripts/make_sprite.py --all", trigger)
+        logger.warning("Splash PNG not found for '%s' - run: python scripts/make_sprite.py --all", trigger)
         return
     _renderer.push(img, force=True)
-    logger.info("Splash → %s (showing for %ds)", trigger, SPLASH_DURATION_S)
+    logger.info("Splash -> %s (showing for %ds)", trigger, SPLASH_DURATION_S)
     time.sleep(SPLASH_DURATION_S)
 
 
@@ -118,17 +140,30 @@ def _push_for_state(state: PrintState, force: bool = False):
     global _last_pushed_state
 
     if state.is_printing:
-        img = make_progress_screen(
+        gif_result = make_progress_gif_frames(
             percent=state.mc_percent,
             layer=state.layer_num,
             total_layers=state.total_layer_num,
             remaining_minutes=state.mc_remaining_time,
-            icon=_printer_icon,
         )
-        pushed = _renderer.push(img, force=force)
+        if gif_result:
+            frames, fps = gif_result
+            if len(frames) == 1:
+                pushed = _renderer.push(frames[0], force=force)
+            else:
+                pushed = _renderer.push_animation(frames, fps=fps, force=force)
+        else:
+            img = make_progress_screen(
+                percent=state.mc_percent,
+                layer=state.layer_num,
+                total_layers=state.total_layer_num,
+                remaining_minutes=state.mc_remaining_time,
+                icon=_printer_icon,
+            )
+            pushed = _renderer.push(img, force=force)
         if pushed:
             logger.info(
-                "Display updated → PRINTING  %d%%  L:%d/%d  ~%dmin",
+                "Display updated -> PRINTING  %d%%  L:%d/%d  ~%dmin",
                 state.mc_percent,
                 state.layer_num,
                 state.total_layer_num,
@@ -139,28 +174,28 @@ def _push_for_state(state: PrintState, force: bool = False):
         if force or _last_pushed_state != "done":
             img = make_done_screen(job_name=state.subtask_name)
             _renderer.push(img, force=True)
-            logger.info("Display updated → DONE (%s)", state.subtask_name)
+            logger.info("Display updated -> DONE (%s)", state.subtask_name)
             _last_pushed_state = "done"
 
     elif state.is_failed:
         if force or _last_pushed_state != "failed":
             img = make_failed_screen()
             _renderer.push(img, force=True)
-            logger.info("Display updated → FAILED")
+            logger.info("Display updated -> FAILED")
             _last_pushed_state = "failed"
 
     elif state.is_paused:
         if force or _last_pushed_state != "paused":
             img = make_idle_screen()
             _renderer.push(img, force=True)
-            logger.info("Display updated → PAUSED")
+            logger.info("Display updated -> PAUSED")
             _last_pushed_state = "paused"
 
     else:
         if force or _last_pushed_state != "idle":
             img = make_idle_screen()
             _renderer.push(img, force=True)
-            logger.info("Display updated → IDLE")
+            logger.info("Display updated -> IDLE")
             _last_pushed_state = "idle"
 
 
@@ -194,7 +229,7 @@ def on_state_change(state: PrintState):
 def main():
     global _renderer, _printer_icon, _running
 
-    logger.info("=== BambuLab → Pixoo 64 Integration starting ===")
+    logger.info("=== BambuLab -> Pixoo 64 Integration starting ===")
     logger.info("Pixoo IP:      %s", PIXOO_IP)
     logger.info("Serial:        %s", BAMBU_SERIAL)
     logger.info("Connect mode:  %s", CONNECTION_MODE.upper())
@@ -205,17 +240,18 @@ def main():
     if _printer_icon:
         logger.info("Loaded printer sprite from %s", sprite_path)
     else:
-        logger.warning("Printer sprite not found at %s — run: python scripts/make_sprite.py --type printer", sprite_path)
+        logger.warning("Printer sprite not found at %s - run: python scripts/make_sprite.py --type printer", sprite_path)
 
     # Init renderer
     _renderer = PixooRenderer(ip=PIXOO_IP, min_interval_s=UPDATE_INTERVAL)
 
     # Ping Pixoo
     if _renderer.ping():
-        logger.info("Pixoo 64 reachable at %s ✓", PIXOO_IP)
+        logger.info("Pixoo 64 reachable at %s [OK]", PIXOO_IP)
         _renderer.set_brightness(PIXOO_BRIGHTNESS)
+        _renderer.set_custom_channel()
     else:
-        logger.error("Cannot reach Pixoo at %s — check IP and WiFi connection", PIXOO_IP)
+        logger.error("Cannot reach Pixoo at %s - check IP and WiFi connection", PIXOO_IP)
         sys.exit(1)
 
     # Push initial idle screen
@@ -232,9 +268,13 @@ def main():
             try:
                 result = cloud_login(BAMBU_EMAIL, BAMBU_PASSWORD)
             except VerificationRequiredError as exc:
-                logger.warning("%s", exc)
-                code = input("Enter verification code: ").strip()
-                result = cloud_login(BAMBU_EMAIL, BAMBU_PASSWORD, code)
+                logger.error("%s", exc)
+                logger.error(
+                    "Verification code required — cannot prompt in service mode. "
+                    "Run interactively first to cache the token: "
+                    "python src/main.py"
+                )
+                sys.exit(1)
         auth_token, mqtt_username = result
         logger.info("Cloud broker:  %s", CLOUD_MQTT_HOST)
         client = BambuCloudMQTTClient(
@@ -268,12 +308,14 @@ def main():
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    # Keep-alive loop: refresh the clock on the idle screen every minute
+    # Keep-alive loop: force-refresh the display every 30 s so it never
+    # goes stale even when the printer state has not changed.
     try:
         while _running:
             time.sleep(30)
             if _running:
-                _push_for_state(client.state, force=False)
+                logger.debug("Keep-alive tick - state=%s %d%%", client.state.gcode_state, client.state.mc_percent)
+                _push_for_state(client.state, force=True)
     except KeyboardInterrupt:
         pass
     finally:
